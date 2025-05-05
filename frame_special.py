@@ -1,12 +1,14 @@
 import torch
 import torchvision
 from torch.utils import data
-from torch.nn import functional
+from torch.nn import functional as F
+# import torch.nn.functional as F
 import pandas as pd
 import os
 import cv2
 from tqdm import tqdm
 from torch import nn
+from torchvision.transforms.functional import resize
 
 def try_gpu(i = 0) -> torch.device:
     """获取设备"""
@@ -22,7 +24,7 @@ def get_map() -> dict:
             object_map[name] = int(idx)
     return object_map
 
-def load_data(data_path = 'train') -> tuple:
+def load_data(data_path = 'train',resize_shape = None) -> tuple:
     """获取原始的img和对应的labels"""
     train_nums = 50000
     train_labels = pd.read_csv('trainLabels.csv')
@@ -32,11 +34,18 @@ def load_data(data_path = 'train') -> tuple:
 
     object_map = get_map()
     loop = tqdm(range(train_nums),desc = 'Load train data')
-    for i in loop:
-        labels_array.append(object_map[train_labels.iloc[i,1]])
-        img_array.append(torchvision.io.read_image(
-            os.path.join(data_path,str(i + 1) + '.png'),mode
-        ))
+    if resize_shape:
+        for i in loop:
+            labels_array.append(object_map[train_labels.iloc[i,1]])
+            img_array.append(resize(torchvision.io.read_image(
+                os.path.join(data_path,str(i + 1) + '.png'),mode
+            ),resize_shape))
+    else:
+        for i in loop:
+            labels_array.append(object_map[train_labels.iloc[i,1]])
+            img_array.append(torchvision.io.read_image(
+                os.path.join(data_path,str(i + 1) + '.png'),mode
+            ))
     return img_array,labels_array # 返回的是list格式
 
 def make_data_iter(arrays,batch_size = 64) -> data.DataLoader:
@@ -54,8 +63,9 @@ class TrainDataset(data.Dataset):
         self.obj2idx = get_map()
         self.idx2obj = [key for key in self.obj2idx.keys()]
         self.obj_nums = len(self.idx2obj)
-        self.features = [self.normalize_img(feature) for feature in features]
-        self.labels = functional.one_hot(torch.tensor(labels),self.obj_nums).to(torch.float32)
+        self.features = [self.normalize_img(feature) 
+                         for feature in tqdm(features,total = len(features),desc = 'Load-Data-iter')]
+        self.labels = F.one_hot(torch.tensor(labels),self.obj_nums).to(torch.float32)
         print(f"load {len(self.labels)} images!")
 
     def normalize_img(self,img):
@@ -71,15 +81,22 @@ class TrainDataset(data.Dataset):
         """定义类的长度"""
         return len(self.features)
 
-def load_test(data_path = 'test'):
+def load_test(data_path = 'test',resize_shape = None):
     mode = torchvision.io.image.ImageReadMode.RGB # 设置模型读入为RGB!!!
     test_arrays = []
     test_nums = 300000
+
     loop = tqdm(range(test_nums),desc = 'Load test data')
-    for i in loop:
-        test_arrays.append(torchvision.io.read_image(
-            os.path.join(data_path,str(i + 1) + '.png'),mode
-        ))
+    if resize_shape:
+        for i in loop:
+            test_arrays.append(resize(torchvision.io.read_image(
+                os.path.join(data_path,str(i + 1) + '.png'),mode
+            ),resize_shape))
+    else:
+        for i in loop:
+            test_arrays.append(torchvision.io.read_image(
+                os.path.join(data_path,str(i + 1) + '.png'),mode
+            ))
     return test_arrays
 
 def normalize_img(img):
@@ -96,7 +113,8 @@ class TestDataset(data.Dataset):
             mean = [0.485, 0.456, 0.406],
             std  = [0.229, 0.224, 0.225]
         ) # RGB格式的通道归一化参数
-        self.features = [self.normalize_img(feature) for feature in features]
+        self.features = [self.normalize_img(feature) 
+                         for feature in tqdm(features,total = len(features),desc = 'Load-Data-iter')]
         print(f"load {len(self.features)} images!")
 
     def normalize_img(self,img):
@@ -112,13 +130,14 @@ class TestDataset(data.Dataset):
         """定义类的长度"""
         return len(self.features)
     
-def train(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn):
+def train(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn,device = None):
     """训练函数"""
     # devices_nums = torch.cuda.device_count()
     # devices = []
     # for i in range(devices_nums):
     #     devices.append(try_gpu(i = i))
-    device = try_gpu(i = 0)
+    if device == None:
+        device = try_gpu(i = 0)
     net = net.to(device)
     net.train()
     optimzer = torch.optim.Adam(net.parameters(),lr = lr)
@@ -141,9 +160,46 @@ def train(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn):
 
             loss_temp += loss.sum().item()
             loop.set_description(f'Epoch [{epoch + 1}/{num_epochs}]')
-            loop.set_postfix({"LOSS" : loss_temp / total_nums})
+            loop.set_postfix({"LOSS" : loss_temp / total_nums,"lr" : "{:e}".format(lr)})
         loss_plt.append(loss_temp / total_nums)
     return loss_plt
+
+def train_resize(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn,resize_shape = (244,244)):
+    """训练函数——可调整图像大小"""
+    # 尝试多GPU训练
+    devices_nums = torch.cuda.device_count()
+    devices = []
+    for i in range(devices_nums):
+        devices.append(try_gpu(i))
+    device = devices[0] # 仅能以第一张卡为主卡
+    # net = torch.nn.DataParallel(net,device_ids = devices)
+    net.to(device)
+    net.train()
+    optimzer = torch.optim.Adam(net.parameters(),lr = lr)
+    loss_plt = []
+    for epoch in range(num_epochs):
+        loss_temp = 0
+        total_nums = 0
+        loop = tqdm(enumerate(train_iter),total = len(train_iter))
+        for batch_idx,batch in loop:
+            X,Y = batch
+            X = X.to(device)
+            X = F.interpolate(X, size=resize_shape, mode='bilinear')
+            Y = Y.to(device)
+            total_nums += X.shape[0]
+
+            optimzer.zero_grad()
+            y_pred = net(X)
+            loss = loss_fn(y_pred,Y)
+            loss.sum().backward()
+            optimzer.step()
+
+            loss_temp += loss.sum().item()
+            loop.set_description(f'Epoch [{epoch + 1}/{num_epochs}]')
+            loop.set_postfix({"LOSS" : loss_temp / total_nums,"lr" : "{:e}".format(lr)})
+        loss_plt.append(loss_temp / total_nums)
+    return loss_plt
+
 
 def count_accurancy(net,train_iter):
     """训练集上准确率测试"""
@@ -158,6 +214,25 @@ def count_accurancy(net,train_iter):
         X = X.to(device)
         Y = Y.to(device).argmax(dim = 1)
         y_pred = net(X).argmax(dim = 1)
+        ans += (y_pred == Y).sum().item()
+    return ans / total_nums
+
+def count_accurancy_resize(net,train_iter,resize_shape = (244,244)):
+    """训练集上准确率测试——可调整图像大小"""
+    device = try_gpu(i = 0)
+    net.eval()
+    net.to(device)
+    total_nums = 0
+    ans = 0
+    loop = tqdm(train_iter,total = len(train_iter),desc = "Eval")
+    for X,Y in loop:
+        total_nums += X.shape[0]
+        X = X.to(device)
+        X = F.interpolate(X, size=resize_shape, mode='bilinear')
+        Y = Y.to(device).argmax(dim = 1)
+        # print(X.shape,Y.shape)
+        y_pred = net(X).argmax(dim = 1)
+        # print(y_pred.shape)
         ans += (y_pred == Y).sum().item()
     return ans / total_nums
         
@@ -175,4 +250,19 @@ def predict(net,test_iter,idx2obj):
             for k in pred:
                 idx += 1
                 file.write(str(idx) + "," + idx2obj[k.item()] + "\n")
-        
+
+def predict_resize(net,test_iter,idx2obj,resize_shape = (244,244)):
+    """测试集上预测推理——可调整图像大小"""
+    device = try_gpu(i = 0)
+    net.eval()
+    net.to(device)
+    loop = tqdm(test_iter,desc = "Predict")
+    idx = 0
+    with open ("result.txt","w",encoding = 'utf-8') as file:
+        for X in loop:
+            X = X.to(device)
+            X = F.interpolate(X, size=resize_shape, mode='bilinear')
+            pred = net(X).argmax(dim = 1)
+            for k in pred:
+                idx += 1
+                file.write(str(idx) + "," + idx2obj[k.item()] + "\n")

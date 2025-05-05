@@ -17,8 +17,10 @@ test/
 train/
 models/
 results/
+raw_data/
 
 # debug or test pyfile
 compare.py
 compare1.py
 compare2.py
+demo.ipynb
