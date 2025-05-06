@@ -20,7 +20,7 @@ object_map = get_map()
 net = vgg(conv_arch,in_H = 244,in_W = 244) # 调整大小
 
 # 定义超参数
-num_epochs = 60
+num_epochs = 20
 lr = 3e-5
 loss_fn = nn.CrossEntropyLoss()
 

@@ -164,14 +164,17 @@ def train(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn,device = None):
         loss_plt.append(loss_temp / total_nums)
     return loss_plt
 
-def train_resize(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn,resize_shape = (244,244)):
+def train_resize(net : nn.Sequential,train_iter,lr,num_epochs,loss_fn,resize_shape = (244,244),device_id = None):
     """训练函数——可调整图像大小"""
     # 尝试多GPU训练
     devices_nums = torch.cuda.device_count()
     devices = []
     for i in range(devices_nums):
         devices.append(try_gpu(i))
-    device = devices[0] # 仅能以第一张卡为主卡
+    if device_id == None:
+        device = devices[0] # 仅能以第一张卡为主卡
+    else:
+        device = device[device_id]
     # net = torch.nn.DataParallel(net,device_ids = devices)
     net.to(device)
     net.train()
