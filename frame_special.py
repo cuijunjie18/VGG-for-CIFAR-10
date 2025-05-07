@@ -17,6 +17,7 @@ def try_gpu(i = 0) -> torch.device:
     return torch.device('cpu')
 
 def get_map() -> dict:
+    """获取labels -> index映射"""
     object_map = {}
     with open("object_map.txt","r",encoding = 'utf-8') as file:
         for line in file:
@@ -50,7 +51,7 @@ def load_data(data_path = 'train',resize_shape = None) -> tuple:
 
 def make_data_iter(arrays,batch_size = 64) -> data.DataLoader:
     """获得数据迭代器"""
-    data_arrays = data.TensorDataset(*arrays) # 构造Dataset
+    data_arrays = data.TensorDataset(*arrays) # 构造Tensor格式的Dataset
     return data.DataLoader(data_arrays,batch_size,shuffle = True) # 注意第一个参数不要给成了data_arrays
 
 class TrainDataset(data.Dataset):
